@@ -1,0 +1,27 @@
+fastapi
+uvicorn[standard]
+
+# Config and environment
+python-dotenv
+pydantic-settings
+
+# Data handling and report export
+pandas
+numpy
+openpyxl
+
+# Agent orchestration and observability
+langgraph
+langfuse
+
+# LLM providers
+openai
+anthropic
+
+# Artifact storage and retrieval
+fsspec
+adlfs
+azure-storage-blob
+
+# Score-id-driven input (MongoDB)
+pymongo
