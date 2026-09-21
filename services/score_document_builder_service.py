@@ -1,7 +1,11 @@
 import logging
 from typing import Any
 
-from domain.narrative_rules import MIN_COMPETENCIES, level_from_score, normalize_benchmark_level
+from domain.narrative_rules import (
+    MIN_COMPETENCIES,
+    framework_band_for,
+    level_from_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +46,16 @@ class ScoreDocumentBuilder:
 
         score_percent = float(comp.get("score_percent", 0.0))
         achieved_level = str(comp.get("achieved_level") or "").strip() or level_from_score(score_percent)
+        framework_level = str(comp.get("framework_level") or "").strip() or framework_band_for(
+            achieved_level, score_percent
+        )
         description = str(comp["description"]).strip() if comp.get("description") else None
 
         return {
             "competency": comp["competency"],
             "score_percent": score_percent,
             "achieved_level": achieved_level,
-            "benchmark_level": normalize_benchmark_level(comp.get("benchmark_level")),
-            "gap_percent": comp.get("gap_percent"),
+            "framework_level": framework_level,
             "description": description,
         }
 

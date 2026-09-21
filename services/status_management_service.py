@@ -53,7 +53,6 @@ class StatusManagementService:
             user_id=user_id,
             status="in progress",
             created_at=_utc_now_iso(),
-            updated_at=_utc_now_iso(),
         )
 
 
@@ -63,7 +62,7 @@ class StatusManagementService:
             self._storage.update_by_attributes(
                 "scores",
                 query,
-                {"feedbackGenerationStatus": "completed", "ExecutiveSummary": result.get("payload", {}).get("executive_summary")},
+                {"feedbackGenerationStatus": "completed", "executiveSummary": result.get("payload", {}).get("executive_summary")},
             )
             for comp in result.get("payload", {}).get("scores_feedback", []):
                 self._storage.update_by_attributes(

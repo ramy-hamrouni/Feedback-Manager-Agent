@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from core.edge_errors import install_exception_handlers
 from core.logging_config import configure_logging
 from core.settings import get_settings
+from core.tracing import flush as flush_tracing, log_tracing_status
 from routers.routes import router as narrative_feedback_router
 from routers.health import router as health_router
 
@@ -18,7 +19,12 @@ logger = logging.getLogger("api.requests")
 async def lifespan(app: FastAPI):
     # Resources are per-request: each Depends(...) provider closes what it opened.
     """TODO:Include initialization for the artificats used by the application"""
+    import os
+
+    log_tracing_status(emit_test_span=os.getenv("LANGFUSE_SELFCHECK") == "1")
     yield
+    # background runs can be cut off mid-flight on shutdown; push what is buffered
+    flush_tracing()
 
 
 app = FastAPI(

@@ -7,9 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class AssessmentCompetencyInput(BaseModel):
     competency: str = Field(min_length=1)
     score_percent: float = Field(ge=0.0, le=100.0)
-    achieved_level: str = Field(default="Not specified")
-    benchmark_level: str | None = None
-    gap_percent: float | None = None
+    achieved_level: str = Field(default="Not specified")  # shown to the reader (stored level, e.g. "Expert")
+    framework_level: str | None = None  # 3-band lookup key for level descriptions; never rendered
     description: str | None = None  # DB-provided (score-id path); falls back to the LLM/artifact path if unset
 
 
@@ -42,14 +41,12 @@ class RunEnvelope(BaseModel):
     assessment_id: str
     status: str
     created_at: str
-    updated_at: str
 
 
 class CompetencyFeedback(BaseModel):
     name: str
     achieved_level: str
     score_percent: float
-    benchmark_position: str
     interpretation: str
     definition: str = ""
 
@@ -63,9 +60,7 @@ class FeedbackPayload(BaseModel):
 
 class AssessmentResultItem(BaseModel):
     assessment_name: str
-    strategy: Literal["benchmarked", "unbenchmarked", "mixed"]
     competency_count: int
-    benchmarked_count: int
     parse_ok: bool
     feedback: FeedbackPayload
     groundedness_score: float | None = None

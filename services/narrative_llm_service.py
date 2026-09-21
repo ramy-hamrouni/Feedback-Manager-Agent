@@ -18,13 +18,11 @@ class NarrativeLLMService:
     async def generate_executive_summary(
         self,
         assessment_name: str,
-        strategy_instruction: str,
         competency_table: str,
         organization: str | None = None,
     ) -> str:
         return await self._summary.generate_executive_summary(
             assessment_name=assessment_name,
-            strategy_instruction=strategy_instruction,
             competency_table=competency_table,
             organization=organization,
         )
@@ -35,15 +33,13 @@ class NarrativeLLMService:
         result_line: str,
         definition: str,
         level_descriptions: dict[str, str],
-        strategy_instruction: str,
         organization: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> str:
         return await self._summary.generate_interpretation(
             competency=competency,
             result_line=result_line,
             definition=definition,
             level_descriptions=level_descriptions,
-            strategy_instruction=strategy_instruction,
             organization=organization,
         )
 

@@ -79,6 +79,7 @@ class MongoRepository:
     def _find_one(self, collection: str, query: dict[str, Any]) -> dict[str, Any] | None:
         db = self._db()
         try:
+            logger.info("Executing Mongo query in region %s for collection '%s': %s", self._region, collection, query)
             doc = db[collection].find_one(query)
         except Exception as exc:
             logger.error("Mongo query failed in region %s for '%s': %s", self._region, collection, exc)

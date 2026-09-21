@@ -13,6 +13,7 @@ openpyxl
 # Agent orchestration and observability
 langgraph
 langfuse
+langchain  # needed by langfuse.langchain.CallbackHandler for node spans
 
 # LLM providers
 openai

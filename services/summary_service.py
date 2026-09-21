@@ -24,8 +24,7 @@ _SECTION_LABEL = re.compile(
     r"(?:^|(?<=\n))\s*(?:[-*\u2022]\s*)?(?:\d+[.)]\s*)?"
     r"(?:headline(?:\s+takeaway)?|overall|summary|clear strengths?|strengths?|"
     r"areas? developing well|developing well|priorit(?:y|ies)(?: for development| areas?)?|"
-    r"development priorit(?:y|ies)|areas? for development|most urgent(?: development area)?|"
-    r"benchmark alignment)\s*:\s*",
+    r"development priorit(?:y|ies)|areas? for development|most urgent(?: development area)?)\s*:\s*",
     re.IGNORECASE,
 )
 
@@ -51,13 +50,6 @@ class ExecutiveSummaryOutput(BaseModel):
 
 
 class CompetencyReportOutput(BaseModel):
-    benchmark_position: str = Field(
-        default="",
-        description="ONE short sentence in the style of the worked examples, e.g. 'Achieved "
-        "Foundation, one level below the Applied benchmark' or 'Achieved Advanced, "
-        "meeting the Advanced benchmark'. Name the achieved level and (if present) "
-        "the benchmark level and state the relationship.",
-    )
     interpretation: str = Field(
         default="",
         description="Constructive, manager-facing narrative in the SAME STYLE as the worked "
@@ -76,14 +68,12 @@ class SummaryService:
     async def generate_executive_summary(
         self,
         assessment_name: str,
-        strategy_instruction: str,
         competency_table: str,
         organization: str | None = None,
     ) -> str:
         user_prompt = V7_EXEC_USER.format(
             organization=organization or "Not specified",
             assessment_name=assessment_name,
-            strategy_instruction=strategy_instruction,
             competency_table=competency_table,
         )
         parsed = await self._llm_client.parse(
@@ -114,16 +104,14 @@ class SummaryService:
         result_line: str,
         definition: str,
         level_descriptions: dict[str, str],
-        strategy_instruction: str,
         organization: str | None = None,
-    ) -> tuple[str, str]:
-        """Returns (benchmark_position, interpretation)."""
+    ) -> str:
+        """Returns the interpretation narrative."""
         user_prompt = V7_COMP_USER.format(
             organization=organization or "Not specified",
             competency=competency,
             result_line=result_line,
             facts=facts_to_text(result_line, definition, level_descriptions),
-            strategy_instruction=strategy_instruction,
         )
         parsed = await self._llm_client.parse(
             system_prompt=V7_FEEDBACK_SYS,
@@ -135,8 +123,8 @@ class SummaryService:
             web_search=self._settings.llm_web_search_interpretation,
         )
         if not parsed.parsed:
-            return "", ""
-        return parsed.parsed.benchmark_position.strip(), parsed.parsed.interpretation.strip()
+            return ""
+        return parsed.parsed.interpretation.strip()
 
 
 def get_summary_service(

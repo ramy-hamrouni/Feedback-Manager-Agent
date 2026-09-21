@@ -10,6 +10,7 @@ from fastapi import Depends
 from pydantic import BaseModel
 
 from core.settings import Settings, get_settings
+from core.tracing import record_llm_call
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -81,7 +82,7 @@ class LLMClient(ABC):
         model: str | None = None,
         web_search: bool = False,
     ) -> LLMResponse:
-        return await self._call(
+        response = await self._call(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
@@ -89,6 +90,14 @@ class LLMClient(ABC):
             model=model,
             web_search=web_search,
         )
+        record_llm_call(
+            model=response.model,
+            provider=self.provider_name(),
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            latency_ms=response.latency_ms,
+        )
+        return response
 
     async def parse(
         self,
@@ -100,7 +109,7 @@ class LLMClient(ABC):
         model: str | None = None,
         web_search: bool = False,
     ) -> ParsedResponse[T]:
-        return await self._parse(
+        parsed = await self._parse(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_format=response_format,
@@ -109,6 +118,14 @@ class LLMClient(ABC):
             model=model,
             web_search=web_search,
         )
+        record_llm_call(
+            model=parsed.model,
+            provider=self.provider_name(),
+            input_tokens=parsed.input_tokens,
+            output_tokens=parsed.output_tokens,
+            latency_ms=parsed.latency_ms,
+        )
+        return parsed
 
 
 class MockLLMClient(LLMClient):

@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,22 @@ class ScoreNotFoundError(EdgeHandledError):
         )
 
 
+def _jsonable(value: object, *, max_len: int = 200) -> object:
+    """Anything that must survive JSON encoding in an error body."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    text = value if isinstance(value, str) else repr(value)
+    return text if len(text) <= max_len else text[:max_len] + "…"
+
+
 class ScoreDataError(EdgeHandledError):
-    """Raised when a score document exists but is malformed (missing/invalid fields)."""
+    """Raised when a score document exists but is not usable.
+
+    Build these with the classmethods rather than formatting a message at the call
+    site: a raw ValidationError stringifies into a multi-line pydantic dump (complete
+    with a docs URL) that is unreadable in an API response and impossible for a client
+    to branch on. The field-level facts belong in `details`, not in `message`.
+    """
 
     def __init__(self, message: str, details: dict | None = None) -> None:
         super().__init__(
@@ -86,6 +101,50 @@ class ScoreDataError(EdgeHandledError):
             code="SCORE_DATA_INVALID",
             message=message,
             details=details,
+        )
+
+    @classmethod
+    def from_validation_error(
+        cls, exc: ValidationError, *, context: dict | None = None
+    ) -> "ScoreDataError":
+        """Turn a pydantic ValidationError into one field-per-entry error body."""
+        errors: list[dict] = []
+        for err in exc.errors(include_url=False):
+            errors.append(
+                {
+                    "field": ".".join(str(part) for part in err.get("loc", ())) or "<root>",
+                    "rule": err.get("type"),
+                    "message": err.get("msg"),
+                    "received": _jsonable(err.get("input")),
+                }
+            )
+        first = errors[0] if errors else None
+        if first:
+            summary = f"This score document is malformed: {first['field']} — {first['message']}."
+            if len(errors) > 1:
+                summary += f" ({len(errors) - 1} further problem(s); see details.)"
+        else:
+            summary = "This score document is malformed."
+        return cls(
+            summary,
+            details={"error_count": len(errors), "errors": errors, **(context or {})},
+        )
+
+    @classmethod
+    def no_competencies(cls, context: dict | None = None) -> "ScoreDataError":
+        return cls(
+            "This score document has no competency scores.",
+            details={"competency_count": 0, **(context or {})},
+        )
+
+    @classmethod
+    def too_few_competencies(
+        cls, count: int, minimum: int, context: dict | None = None
+    ) -> "ScoreDataError":
+        return cls(
+            f"This score document has {count} competency score(s); at least {minimum} are "
+            "required to generate feedback.",
+            details={"competency_count": count, "minimum_required": minimum, **(context or {})},
         )
 
 

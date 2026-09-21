@@ -1,0 +1,55 @@
+flowchart TD
+    IN(["run_assessment seeds state:<br/>request_data · assessment · competencies<br/>step_sources={} · pipeline_trace=[]"])
+
+    IN --> A
+
+    A["retrieve_descriptions<br/>in: competencies<br/>out: descriptions, description_sources"]
+    B["generate_descriptions<br/>in: + request_data, step_sources<br/>out: descriptions, description_sources, step_sources"]
+    C["generate_role<br/>in: request_data, assessment, competencies, descriptions<br/>out: resolved_role, step_sources"]
+    D["generate_job_purpose<br/>in: request_data, resolved_role, competencies<br/>out: job_purpose, step_sources"]
+    E["build_framework<br/>in: competencies, descriptions, resolved_role, job_purpose<br/>out: framework_context, levels_sources, step_sources"]
+    F["prepare_feedback_context<br/>in: competencies → achieved_level + score_percent<br/>out: competency_table_lines, competency_table"]
+    G["generate_executive_summary<br/>in: assessment, competency_table<br/>out: executive_summary"]
+    H["generate_competency_feedback<br/>in: competencies, framework_context<br/>out: feedback_competencies"]
+    I{"parse_output<br/>feedback_competencies non-empty?"}
+    J["verify_groundedness<br/>placeholder: score = 1.0 if parse_ok else 0.0"]
+    Z(["END"])
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I
+    I -- "ok" --> J --> Z
+    I -- "fail" --> Z
+
+    E -. "invoked once per competency" .-> S
+
+    subgraph FW ["framework item graph — nested, one run per competency"]
+        direction TB
+        S["select_best<br/>in: competency, resolved_role<br/>out: selected, framework_route, framework_examples"]
+        T["take<br/>reuse matched artifact row<br/>out: levels, level_source='framework'"]
+        U["generate<br/>LLM call<br/>out: levels, level_source, step_sources"]
+        FE(["END → levels folded into framework_context[competency]"])
+        S -- "exact role match" --> T
+        S -- "no match / no hits" --> U
+        T --> FE
+        U --> FE
+    end
+
+    LV["THE LEVEL SPLIT<br/>achieved_level — stored label, e.g. 'Expert'<br/>→ prompt facts · competency_table · output<br/><br/>framework_level — mapped band, e.g. 'Advanced'<br/>→ _level_descriptions_for lookup ONLY"]
+    LV -.-> H
+
+    N1["ORDERING: summary is written BEFORE<br/>the interpretations exist — it only ever sees<br/>levels + scores, never the narrative"]
+    N1 -.-> G
+
+    N2["DEAD OUTPUT: levels_sources is written<br/>here and read by nothing"]
+    N2 -.-> E
+
+    classDef node fill:#e8eef7,stroke:#41577d,stroke-width:1px,color:#13203a
+    classDef gate fill:#f7edd9,stroke:#9a7433,stroke-width:1px,color:#3a2c13
+    classDef term fill:#dfe7df,stroke:#4d6b4d,stroke-width:1px,color:#1b2a1b
+    classDef note fill:#fbe4e4,stroke:#a35050,stroke-width:1px,color:#3d1717
+    classDef info fill:#e6e0f2,stroke:#6b579a,stroke-width:1px,color:#221a3a
+
+    class A,B,C,D,E,F,G,H,J,S,T,U node
+    class I gate
+    class IN,Z,FE term
+    class N1,N2 note
+    class LV info

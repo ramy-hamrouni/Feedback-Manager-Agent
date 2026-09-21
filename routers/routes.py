@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated
 
 import asyncio
@@ -42,6 +43,13 @@ async def create_run(
         assessments_req,
     )
 
-    return RunEnvelope(status="accepted")
+    now = datetime.now(timezone.utc).isoformat()
+    return RunEnvelope(
+        project_id=req.project_id,
+        user_id=req.user_id,
+        assessment_id=req.assessment_id,
+        status="in progress",
+        created_at=now,
+    )
 
 

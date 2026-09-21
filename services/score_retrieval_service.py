@@ -16,7 +16,12 @@ from core.edge_errors import (
     ScoreDataError,
 )
 from core.settings import Settings, get_settings
-from domain.narrative_rules import level_from_score
+from domain.narrative_rules import (
+    LEVEL_TO_FRAMEWORK_BAND,
+    MIN_COMPETENCIES,
+    framework_band_for,
+    level_from_score,
+)
 from repositories.mongo_repository import InvalidIdError, MongoRepository, get_mongo_repository
 from schemas.schemas import AssessmentCompetencyInput, AssessmentInput, EmployeeAssessmentsRequest
 
@@ -33,7 +38,10 @@ def _oid_str(value: Any) -> str | None:
 class CompetencyScoreItem(BaseModel):
     competency_id: str | None = Field(default=None, alias="competencyId")
     competency_name: str = Field(alias="competencyName")
-    competency_quantitative_value: float = Field(alias="competencyQuantitativeValue")
+    competency_level: str | None = Field(default=None, alias="competencyLevel")
+    competency_quantitative_value: float = Field(
+        alias="competencyQuantitativeValue", ge=0.0, le=100.0
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -106,15 +114,43 @@ class ScoreRetrievalService:
                 logger.info("Score not found: project_id=%s, assessment_id=%s, user_id=%s", project_id, assessment_id, user_id)
                 raise ScoreNotFoundError()
         if not isinstance(raw, dict):
-            raise ScoreDataError(f"This Score is not a valid document: {type(raw).__name__}")
+            raise ScoreDataError(
+                "This score document is not a valid document.",
+                details={
+                    "received_type": type(raw).__name__,
+                    "project_id": project_id,
+                    "assessment_id": assessment_id,
+                    "user_id": user_id,
+                },
+            )
+        context = {
+            "project_id": project_id,
+            "assessment_id": assessment_id,
+            "user_id": user_id,
+        }
         try:
             score = ScoreDocument.from_raw(raw)
         except ValidationError as exc:
-            logger.warning("Malformed score document %s: %s", f"project_id={project_id}, assessment_id={assessment_id}, user_id={user_id}", exc)
-            raise ScoreDataError(f"This Score is malformed: {exc}") from exc
+            logger.warning(
+                "Malformed score document project_id=%s, assessment_id=%s, user_id=%s: %s",
+                project_id, assessment_id, user_id, exc,
+            )
+            raise ScoreDataError.from_validation_error(exc, context=context) from exc
         if not score.competencies:
             logger.warning("Score project_id=%s, assessment_id=%s, user_id=%s has no competency scores", project_id, assessment_id, user_id)
-            raise ScoreDataError(f"This Score has no competency scores.")
+            raise ScoreDataError.no_competencies(context)
+        if len(score.competencies) < MIN_COMPETENCIES:
+            logger.warning(
+                "Score project_id=%s, assessment_id=%s, user_id=%s has %d competency scores, below minimum %d",
+                project_id,
+                assessment_id,
+                user_id,
+                len(score.competencies),
+                MIN_COMPETENCIES,
+            )
+            raise ScoreDataError.too_few_competencies(
+                len(score.competencies), MIN_COMPETENCIES, context
+            )
         return score
 
     def _fetch_project(self, project_id: str | None) -> ProjectDocument | None:
@@ -165,13 +201,24 @@ class ScoreRetrievalService:
         for comp in score.competencies:
             score_percent = float(comp.competency_quantitative_value)
             description = self._fetch_competency_description(comp.competency_id)
+            stored_level = (comp.competency_level or "").strip()
+            computed_level = level_from_score(score_percent)
+            if stored_level and stored_level not in LEVEL_TO_FRAMEWORK_BAND:
+                logger.warning(
+                    "Competency %r has unrecognized stored level %r; "
+                    "framework lookup falls back to the score-derived band %r",
+                    comp.competency_name,
+                    stored_level,
+                    computed_level,
+                )
             competencies.append(
                 AssessmentCompetencyInput(
                     competency=comp.competency_name,
+                    # what the reader sees: the level the scoring system assigned
+                    achieved_level=stored_level or computed_level,
+                    # lookup key only: selects which framework level description is used
+                    framework_level=framework_band_for(stored_level or computed_level, score_percent),
                     score_percent=score_percent,
-                    achieved_level=level_from_score(score_percent),
-                    benchmark_level=None,  # no benchmark on a score document
-                    gap_percent=None,
                     description=description,
                 )
             )

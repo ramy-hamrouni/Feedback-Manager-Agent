@@ -6,17 +6,15 @@ from typing import Any, Awaitable, Callable, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from core.settings import Settings
+from core.tracing import graph_config, node_scope
 from domain.narrative_rules import (
-    BAND_MIN,
     DEFAULT_FRAMEWORK_LEVELS,
+    LEVEL_TO_FRAMEWORK_BAND,
     MIN_COMPETENCIES,
     ZERO_LEVEL_LABEL,
-    BENCHMARK_TO_FRAMEWORK,
     normalize_role,
     role_similarity,
-    strategy_from_competencies,
 )
-from prompts.narrative_feedback_prompts import strategy_instruction as strategy_instruction_for
 from services.narrative_llm_service import NarrativeLLMService
 from services.narrative_artifacts_service import NarrativeArtifactsService
 
@@ -28,7 +26,6 @@ _LOG_VALUE_CHARS = 300
 # State keys each step reads, so the I/O log shows what actually went in
 # rather than the whole accumulated state.
 STEP_INPUT_KEYS: dict[str, tuple[str, ...]] = {
-    "detect_strategy": ("competencies",),
     "retrieve_descriptions": ("competencies",),
     "generate_descriptions": ("competencies", "descriptions", "description_sources", "request_data"),
     "generate_role": ("request_data", "assessment", "competencies", "descriptions"),
@@ -38,16 +35,12 @@ STEP_INPUT_KEYS: dict[str, tuple[str, ...]] = {
     "generate_executive_summary": (
         "assessment",
         "request_data",
-        "strategy",
-        "strategy_instruction",
         "competency_table",
-        "benchmarked_count",
     ),
     "generate_competency_feedback": (
         "request_data",
         "competencies",
         "framework_context",
-        "strategy_instruction",
     ),
     "parse_output": ("feedback_competencies",),
     "verify_groundedness": ("parse_ok",),
@@ -110,8 +103,6 @@ class AssessmentGraphState(TypedDict, total=False):
     competencies: list[dict[str, Any]]
     pipeline_trace: list[dict[str, Any]]
     step_sources: dict[str, list[str]]
-    strategy: str
-    benchmarked_count: int
     descriptions: dict[str, str]
     description_sources: dict[str, str]
     resolved_role: str
@@ -120,7 +111,6 @@ class AssessmentGraphState(TypedDict, total=False):
     levels_sources: dict[str, str]
     competency_table_lines: list[str]
     competency_table: str
-    strategy_instruction: str
     executive_summary: str
     feedback_competencies: list[dict[str, Any]]
     parse_ok: bool
@@ -145,7 +135,6 @@ class NarrativeFeedbackWorkflow:
         return {
             "pipeline_version": "v7-inspired",
             "phases": [
-                "detect_strategy",
                 "retrieve_descriptions",
                 "generate_descriptions",
                 "generate_role",
@@ -161,7 +150,7 @@ class NarrativeFeedbackWorkflow:
                 "min_competencies_per_assessment": MIN_COMPETENCIES,
             },
             "mappings": {
-                "benchmark_to_framework": BENCHMARK_TO_FRAMEWORK,
+                "level_to_framework_band": LEVEL_TO_FRAMEWORK_BAND,
                 "score_to_level": {
                     "0": ZERO_LEVEL_LABEL,
                     "1-33": "Foundation",
@@ -218,7 +207,12 @@ class NarrativeFeedbackWorkflow:
         )
         started = perf_counter()
         try:
-            final_state = await self._assessment_graph.ainvoke(initial_state)
+            final_state = await self._assessment_graph.ainvoke(
+                initial_state,
+                config=graph_config(
+                    f"graph · {assessment.get('assessment_name') or 'assessment'}"
+                ),
+            )
         except Exception:
             logger.exception(
                 "Pipeline failed after %.0fms", (perf_counter() - started) * 1000
@@ -247,7 +241,8 @@ class NarrativeFeedbackWorkflow:
             _format_payload(dict(state), STEP_INPUT_KEYS.get(step_name)),
         )
         try:
-            updates = await fn(state)
+            with node_scope(step_name):
+                updates = await fn(state)
         except Exception:
             logger.exception(
                 "Step %s: FAILED after %.0fms (inputs: %s)",
@@ -305,7 +300,6 @@ class NarrativeFeedbackWorkflow:
 
     def _build_assessment_graph(self) -> Any:
         graph = StateGraph(AssessmentGraphState)
-        graph.add_node("detect_strategy", self._node_step("detect_strategy", self._graph_detect_strategy))
         graph.add_node("retrieve_descriptions", self._node_step("retrieve_descriptions", self._graph_retrieve_descriptions))
         graph.add_node("generate_descriptions", self._node_step("generate_descriptions", self._graph_generate_descriptions))
         graph.add_node("generate_role", self._node_step("generate_role", self._graph_generate_role))
@@ -317,8 +311,7 @@ class NarrativeFeedbackWorkflow:
         graph.add_node("parse_output", self._node_step("parse_output", self._graph_parse_output))
         graph.add_node("verify_groundedness", self._node_step("verify_groundedness", self._graph_verify_groundedness))
 
-        graph.add_edge(START, "detect_strategy")
-        graph.add_edge("detect_strategy", "retrieve_descriptions")
+        graph.add_edge(START, "retrieve_descriptions")
         graph.add_edge("retrieve_descriptions", "generate_descriptions")
         graph.add_edge("generate_descriptions", "generate_role")
         graph.add_edge("generate_role", "generate_job_purpose")
@@ -426,20 +419,6 @@ class NarrativeFeedbackWorkflow:
             "levels": levels,
             "level_source": "generated+fewshot" if examples else "generated",
             "step_sources": step_sources,
-        }
-
-    async def _graph_detect_strategy(self, state: AssessmentGraphState) -> dict[str, Any]:
-        strategy, benchmarked_count = strategy_from_competencies(state["competencies"])
-        logger.info(
-            "Strategy=%s (%d of %d competencies benchmarked)",
-            strategy,
-            benchmarked_count,
-            len(state["competencies"]),
-        )
-        return {
-            "strategy": strategy,
-            "benchmarked_count": benchmarked_count,
-            "strategy_instruction": strategy_instruction_for(strategy),
         }
 
     async def _graph_retrieve_descriptions(self, state: AssessmentGraphState) -> dict[str, Any]:
@@ -603,7 +582,10 @@ class NarrativeFeedbackWorkflow:
                 "job_purpose": job_purpose,
                 "step_sources": step_sources,
             }
-            framework_out = await self._framework_item_graph.ainvoke(framework_state)
+            framework_out = await self._framework_item_graph.ainvoke(
+                framework_state,
+                config=graph_config(f"framework · {comp['competency']}"),
+            )
             selected = framework_out.get("selected") or {}
             levels = framework_out.get("levels") or dict(DEFAULT_FRAMEWORK_LEVELS)
             levels_sources[comp["competency"]] = str(framework_out.get("level_source") or "generated")
@@ -636,29 +618,15 @@ class NarrativeFeedbackWorkflow:
             comp_name = comp["competency"]
             achieved = comp["achieved_level"]
             score = float(comp["score_percent"])
-            benchmark = comp.get("benchmark_level")
             zero_case = achieved.lower() == ZERO_LEVEL_LABEL.lower() or score == 0
-            if benchmark:
-                benchmark_min = BAND_MIN.get(benchmark, BAND_MIN["Applied"])
-                gap_percent = score - float(benchmark_min)
-                meets = "MEETS" if score >= benchmark_min else "BELOW"
-                if zero_case:
-                    competency_table_lines.append(
-                        f"{comp_name}: assessed 0% ({ZERO_LEVEL_LABEL}), benchmark {benchmark}, gap {gap_percent:+.0f}%, {meets}"
-                    )
-                else:
-                    competency_table_lines.append(
-                        f"{comp_name}: achieved {achieved} ({score:.0f}%), benchmark {benchmark}, gap {gap_percent:+.0f}%, {meets}"
-                    )
+            if zero_case:
+                competency_table_lines.append(
+                    f"{comp_name}: assessed 0% ({ZERO_LEVEL_LABEL})"
+                )
             else:
-                if zero_case:
-                    competency_table_lines.append(
-                        f"{comp_name}: assessed 0% ({ZERO_LEVEL_LABEL}), no benchmark set"
-                    )
-                else:
-                    competency_table_lines.append(
-                        f"{comp_name}: achieved {achieved} ({score:.0f}%), no benchmark set"
-                    )
+                competency_table_lines.append(
+                    f"{comp_name}: achieved {achieved} ({score:.0f}%)"
+                )
 
         logger.info("Feedback context: %d competency line(s) prepared", len(competency_table_lines))
         for line in competency_table_lines:
@@ -671,18 +639,14 @@ class NarrativeFeedbackWorkflow:
     async def _graph_generate_executive_summary(self, state: AssessmentGraphState) -> dict[str, Any]:
         assessment = state["assessment"]
         request_data = state["request_data"]
-        strategy = state.get("strategy") or "mixed"
-        benchmarked_count = int(state.get("benchmarked_count") or 0)
         competencies = state["competencies"]
 
         fallback_summary = (
-            f"Assessment '{assessment['assessment_name']}' covers {len(competencies)} competencies with "
-            f"{benchmarked_count} benchmarked; strategy is {strategy}."
+            f"Assessment '{assessment['assessment_name']}' covers {len(competencies)} competencies."
         )
         try:
             summary = await self._llm_service.generate_executive_summary(
                 assessment_name=assessment["assessment_name"],
-                strategy_instruction=state.get("strategy_instruction") or "",
                 competency_table=state.get("competency_table") or "",
                 organization=request_data.get("organization"),
             )
@@ -706,22 +670,17 @@ class NarrativeFeedbackWorkflow:
         """Notebook `_build_competency_facts['result_line']`."""
         achieved = str(comp.get("achieved_level") or "")
         score = float(comp.get("score_percent", 0.0))
-        benchmark = comp.get("benchmark_level")
-        if benchmark:
-            benchmark_min = BAND_MIN.get(benchmark, BAND_MIN["Applied"])
-            gap = score - float(benchmark_min)
-            meets = "MEETS" if score >= benchmark_min else "BELOW"
-            return f"achieved {achieved} ({score:.0f}%), benchmark {benchmark}, gap {gap:+.0f}%, {meets}"
-        return f"achieved {achieved} ({score:.0f}%), no benchmark"
+        return f"achieved {achieved} ({score:.0f}%)"
 
     @staticmethod
     def _level_descriptions_for(comp: dict[str, Any], levels: dict[str, str]) -> dict[str, str]:
-        """Only the levels the result actually references (achieved + benchmark), as the
-        notebook does - never the whole ladder."""
-        wanted = [str(comp.get("achieved_level") or "")]
-        benchmark = comp.get("benchmark_level")
-        if benchmark:
-            wanted.append(BENCHMARK_TO_FRAMEWORK.get(str(benchmark), str(benchmark)))
+        """Only the level the result actually references, as the notebook does -
+        never the whole ladder.
+
+        Keyed on `framework_level` (the 3-band mapping), not on `achieved_level` (the
+        stored label shown to the reader), so a 4-level source such as "Expert" still
+        resolves to a description instead of silently matching nothing."""
+        wanted = [str(comp.get("framework_level") or comp.get("achieved_level") or "")]
         selected: dict[str, str] = {}
         seen: set[str] = set()
         for level in wanted:
@@ -739,7 +698,6 @@ class NarrativeFeedbackWorkflow:
         framework_context = state.get("framework_context") or {}
         request_data = state["request_data"]
         organization = request_data.get("organization")
-        instruction = state.get("strategy_instruction") or ""
         feedback_competencies: list[dict[str, Any]] = []
         sources_used: list[str] = []
 
@@ -747,15 +705,9 @@ class NarrativeFeedbackWorkflow:
             name = comp["competency"]
             score = float(comp.get("score_percent", 0.0))
             achieved_level = str(comp.get("achieved_level") or "")
-            benchmark_level = comp.get("benchmark_level")
             context = framework_context.get(name) or {}
             definition = context.get("definition", "")
             result_line = self._result_line(comp)
-
-            if benchmark_level:
-                relation = f"Achieved {achieved_level}, benchmark set at {benchmark_level}"
-            else:
-                relation = f"Achieved {achieved_level}, no benchmark set"
 
             interpretation = (
                 f"In the competency of {name}, the employee has reached "
@@ -764,21 +716,18 @@ class NarrativeFeedbackWorkflow:
             source = "template"
             if score > 0:
                 try:
-                    benchmark_position, generated = await self._llm_service.generate_interpretation(
+                    generated = await self._llm_service.generate_interpretation(
                         competency=name,
                         result_line=result_line,
                         definition=definition,
                         level_descriptions=self._level_descriptions_for(
                             comp, context.get("levels") or {}
                         ),
-                        strategy_instruction=instruction,
                         organization=organization,
                     )
                     if generated:
                         interpretation = generated
                         source = "llm"
-                    if benchmark_position:
-                        relation = benchmark_position
                 except Exception as exc:
                     if not self._settings.llm_fallback_to_rules:
                         logger.exception(
@@ -806,18 +755,16 @@ class NarrativeFeedbackWorkflow:
                     "name": name,
                     "achieved_level": achieved_level,
                     "score_percent": score,
-                    "benchmark_position": relation,
                     "interpretation": interpretation,
                     "definition": definition,
                 }
             )
             sources_used.append(source)
             logger.debug(
-                "  interpretation[%s]: score=%.0f%% achieved=%s benchmark=%s levels_in_prompt=%d source=%s",
+                "  interpretation[%s]: score=%.0f%% achieved=%s levels_in_prompt=%d source=%s",
                 name,
                 score,
                 achieved_level or "<unset>",
-                benchmark_level or "<none>",
                 len(self._level_descriptions_for(comp, context.get("levels") or {})),
                 source,
             )

@@ -6,8 +6,7 @@ from typing import Any
 
 MIN_COMPETENCIES = 3
 ZERO_LEVEL_LABEL = "No Proficiency Demonstrated"
-BAND_MIN = {"Foundation": 0.0, "Applied": 34.0, "Advanced": 67.0}
-BENCHMARK_TO_FRAMEWORK = {
+LEVEL_TO_FRAMEWORK_BAND = {
     "Foundation": "Foundation",
     "Intermediate": "Applied",
     "Applied": "Applied",
@@ -58,18 +57,17 @@ def level_from_score(score_percent: float) -> str:
     return "Advanced"
 
 
-def normalize_benchmark_level(level: str | None) -> str | None:
-    if not level:
-        return None
-    return BENCHMARK_TO_FRAMEWORK.get(str(level).strip(), str(level).strip())
+def framework_band_for(level: str | None, score_percent: float) -> str:
+    """Map a stored/authored level onto the 3-band ladder the framework level
+    descriptions are keyed by. This is a LOOKUP KEY, never a label shown to a reader:
+    the stored level (e.g. "Expert") is what gets rendered, this is what selects the
+    description. An unrecognized level falls back to the score-derived band so the
+    lookup can never silently miss."""
+    key = str(level or "").strip()
+    if key in LEVEL_TO_FRAMEWORK_BAND:
+        return LEVEL_TO_FRAMEWORK_BAND[key]
+    return level_from_score(score_percent)
 
 
-def strategy_from_competencies(competencies: list[dict[str, Any]]) -> tuple[str, int]:
-    benchmarked_count = sum(1 for c in competencies if c.get("benchmark_level"))
-    if benchmarked_count == len(competencies):
-        return "benchmarked", benchmarked_count
-    if benchmarked_count == 0:
-        return "unbenchmarked", benchmarked_count
-    return "mixed", benchmarked_count
 
 
