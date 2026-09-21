@@ -1,12 +1,12 @@
 import json
 import shutil
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 import fsspec
 
 from core.settings import Settings, get_settings
-from fastapi import Depends
+from fastapi import Depends, Request
 
 
 def _norm_rel(path: str) -> str:
@@ -96,5 +96,6 @@ class ObjectStorageRepository:
             with local_path.open("wb") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
         return local_path
-def get_storage_repository(settings: Settings = Depends(get_settings)) -> ObjectStorageRepository:
-    return ObjectStorageRepository(settings=settings)
+def get_storage_repository(request: Request) -> Iterator[ObjectStorageRepository]:
+    """The process-wide storage repository built in lifespan."""
+    yield request.app.state.storage

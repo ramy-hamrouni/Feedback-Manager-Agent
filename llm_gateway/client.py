@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Annotated, AsyncIterator, Generic, TypeVar
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from pydantic import BaseModel
 
@@ -457,11 +457,10 @@ def create_llm_client(settings: Settings) -> LLMClient:
     return MockLLMClient()
 
 
-async def get_llm_client(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> AsyncIterator[LLMClient]:
-    client = create_llm_client(settings)
-    try:
-        yield client
-    finally:
-        await client.aclose()
+async def get_llm_client(request: Request) -> AsyncIterator[LLMClient]:
+    """The process-wide LLM client built in lifespan.
+
+    Not constructed here: the provider SDKs hold an HTTP connection pool, so a client
+    per request meant a fresh pool and TLS handshake for every call.
+    """
+    yield request.app.state.llm

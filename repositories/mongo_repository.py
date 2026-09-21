@@ -2,7 +2,7 @@ from typing import Annotated, Any, Iterator
 
 import logging
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
 from bson import ObjectId
 from pymongo import MongoClient
@@ -132,11 +132,11 @@ class MongoRepository:
         return True
 
 
-def get_mongo_repository(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> Iterator[MongoRepository]:
-    repository = MongoRepository(settings)
-    try:
-        yield repository
-    finally:
-        repository.close()
+def get_mongo_repository(request: Request) -> Iterator[MongoRepository]:
+    """The process-wide repository built in lifespan.
+
+    Not constructed here: MongoClient owns a connection pool and is meant to live for
+    the process, and a per-request close() also cut the pool out from under background
+    tasks, which run after dependency teardown.
+    """
+    yield request.app.state.mongo

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Iterator
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from repositories.storage_repository import ObjectStorageRepository, get_storage_repository
 from core.settings import Settings, get_settings
 
@@ -305,12 +305,10 @@ class NarrativeArtifactsService:
         return None
 
 
-def get_artifacts_service(
-    storage_repo: Annotated[ObjectStorageRepository, Depends(get_storage_repository)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> Iterator[NarrativeArtifactsService]:
-    artifacts =  NarrativeArtifactsService(settings, storage_repo)
-    try:
-        yield artifacts
-    finally:
-        artifacts.close()
+def get_artifacts_service(request: Request) -> Iterator[NarrativeArtifactsService]:
+    """The process-wide artifact service built in lifespan.
+
+    Not constructed here: __init__ loads and parses every artifact, so building one per
+    request re-did that work on every call, including calls that never used it.
+    """
+    yield request.app.state.artifacts
